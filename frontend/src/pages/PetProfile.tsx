@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react'
-import { supabase } from '../lib/supabase'
 import { Plus, Trash2, LogOut, Edit2, Camera, Upload } from 'lucide-react'
 import { useStore } from '../store'
 import { useNavigate } from 'react-router-dom'
@@ -94,8 +93,7 @@ export default function PetProfile() {
       if (editingId) {
         // Update existing pet
         await api.pets.update(editingId, petData)
-        // Refresh local list (since we are mocking, we might need to manually update store if api doesn't return list)
-        // For now let's re-fetch or update store directly
+        // Refresh local list
         const updatedPets = pets.map(p => p.id === editingId ? { ...p, ...petData } : p)
         setPets(updatedPets as any)
       } else {
@@ -113,8 +111,13 @@ export default function PetProfile() {
 
   async function deletePet(id: string) {
     if (!confirm('确定要删除吗？')) return
-    await api.pets.delete(id)
-    setPets(pets.filter(p => p.id !== id))
+    try {
+      await api.pets.delete(id)
+      setPets(pets.filter(p => p.id !== id))
+    } catch (error) {
+      console.error(error)
+      alert('删除失败')
+    }
   }
 
   const handleLogout = () => {
@@ -191,6 +194,34 @@ export default function PetProfile() {
                 <option value="dog">狗</option>
               </select>
             </div>
+          </div>
+
+          <div>
+             <label className="block text-sm font-medium text-gray-700 mb-1">性别</label>
+             <div className="flex gap-4">
+               <label className="flex items-center gap-2 cursor-pointer">
+                 <input 
+                   type="radio"
+                   name="gender"
+                   value="male"
+                   checked={formData.gender === 'male'}
+                   onChange={e => setFormData({...formData, gender: e.target.value})}
+                   className="text-primary focus:ring-primary"
+                 />
+                 <span>公 (Male) ♂️</span>
+               </label>
+               <label className="flex items-center gap-2 cursor-pointer">
+                 <input 
+                   type="radio"
+                   name="gender"
+                   value="female"
+                   checked={formData.gender === 'female'}
+                   onChange={e => setFormData({...formData, gender: e.target.value})}
+                   className="text-primary focus:ring-primary"
+                 />
+                 <span>母 (Female) ♀️</span>
+               </label>
+             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4">

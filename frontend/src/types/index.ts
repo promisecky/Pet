@@ -10,6 +10,7 @@ export type Pet = {
   is_neutered: boolean
   medical_history?: string
   avatar_url?: string
+  status?: string
   created_at: string
 }
 
@@ -48,4 +49,16 @@ export type Device = {
   last_active?: string
   config?: any
   created_at: string
+}
+
+export type Task = {
+  id: string
+  pet_id: string
+  title: string
+  detail: string
+  icon: string
+  color: string
+  completed: boolean
+  task_date?: string
+  created_at?: string
 }

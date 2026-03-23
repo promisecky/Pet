@@ -1,96 +1,78 @@
-# 宠物健康计划 Web - 技术架构文档
+# Pet Health - 技术架构文档
 
-> **当前状态**: 前端独立部署版 (Mock Backend)
-> **最后更新**: 2026-03-10
+> **当前状态**: 前后端集成部署版
+> **最后更新**: 2026-03-23
 
-## 1. 系统架构图 (Current MVP)
+## 1. 系统架构图
 
-目前采用**前端优先 (Frontend-First)** 策略，通过 Mock Adapter 模拟后端交互，实现快速迭代与演示。
+本项目采用**前后端分离 (Frontend-Backend Decoupling)** 架构，通过 RESTful API 进行交互。
 
 ```mermaid
 graph TD
-    User[用户 (Web/Mobile)] -->|HTTPS| Vercel[Vercel Edge Network]
-    Vercel -->|Serve| Frontend[前端应用 (React SPA)]
+    User[用户 (Web/Mobile)] -->|HTTPS| Frontend[前端应用 (React SPA)]
     
     subgraph "Frontend Layer"
-        Page[页面组件 (Dashboard/Profile)]
+        Page[页面组件 (Dashboard/Profile/Plan)]
         Store[状态管理 (Zustand)]
-        MockAPI[API Adapter (src/lib/api.ts)]
+        API_Layer[API Client (src/lib/api.ts)]
     end
     
-    Page -->|Action| Store
-    Store -->|Async| MockAPI
-    MockAPI -->|Simulate| MockData[本地内存数据]
+    Frontend --> API_Layer
+    API_Layer -->|RESTful Request| Backend[后端服务 (Spring Boot)]
     
-    subgraph "Future Backend (Planned)"
-        Supabase[Supabase (Auth/DB)]
-        AI_Service[AI Model (LLM)]
+    subgraph "Backend Layer"
+        Controller[REST Controller]
+        Service[Service Logic]
+        Repo[JPA Repository]
+        AI_Integration[DashScope AI Integration]
     end
     
-    MockAPI -.->|Future Switch| Supabase
+    Backend -->|SQL| MySQL[(MySQL Database)]
+    Backend -->|SDK| DashScope[阿里云通义千问]
 ```
 
-## 2. 技术栈选型
+## 2. 技术栈详解
 
 ### 2.1 前端 (Frontend)
-- **核心框架**: React 18 + Vite 5
-- **语言**: TypeScript 5.x
-- **样式方案**: 
-  - **Tailwind CSS 3.4**: 原子化 CSS，快速构建响应式布局。
-  - **clsx / tailwind-merge**: 动态类名管理。
-- **图标库**: Lucide React (轻量、统一风格)
-- **状态管理**: Zustand (轻量级全局状态管理，替代 Redux/Context)
-- **路由**: React Router DOM v6
-- **数据可视化**: Recharts (响应式图表)
-- **动画**: CSS Transitions + Tailwind Animate
+- **React 18**: 使用函数式组件与 Hooks (useEffect, useState)。
+- **TypeScript**: 全面类型检查，定义在 `src/types/index.ts`。
+- **Zustand**: 轻量级全局状态管理，负责处理用户、宠物及**实时任务列表**的跨页面同步。
+- **Tailwind CSS**: 原子化样式，响应式布局。
+- **Recharts**: 用于渲染宠物体重近 7 天的变化趋势。
+- **Lucide React**: 统一图标库。
 
-### 2.2 模拟后端 (Mock Backend Strategy)
-为了在没有真实后端的情况下进行全功能开发，我们实现了 **Mock Adapter Pattern**：
-- **位置**: `src/lib/api.ts`
-- **机制**: 拦截所有的业务请求（Auth, Pets, Plans）。
-- **数据**: 使用 `setTimeout` 模拟网络延迟，返回符合接口定义的 Mock JSON 数据。
-- **优势**: 
-  - 前端开发不阻塞。
-  - 演示环境零部署成本。
-  - 接口定义稳定后，只需替换 `api.ts` 内部实现即可无缝切换到真实 Supabase 后端。
+### 2.2 后端 (Backend)
+- **Spring Boot 3.2**: 核心 Java 开发框架。
+- **Spring Data JPA**: 基于 Hibernate 实现的数据库持久化，自动根据实体类管理表结构。
+- **DashScope SDK**: 集成阿里云通义千问模型，实现 AI 宠物健康计划生成。
+- **Lombok**: 简化 Java 代码，自动生成 Getter/Setter。
 
-### 2.3 部署 (Deployment)
-- **平台**: Vercel
-- **流程**: GitHub Push -> Vercel Build -> Edge Deployment
-- **构建命令**: `npm run build` (tsc + vite build)
+### 2.3 数据库 (Database)
+- **MySQL 8.4**: 数据存储。
+- **隔离性设计**: 本项目使用独立的 `mysql-data` 目录进行挂载，避免与系统原生 MySQL 配置冲突。
 
-## 3. 数据流设计
+## 3. 核心业务流程
 
-### 3.1 状态管理 (Store)
-使用 Zustand 创建单一数据源 `useStore`：
-- **User Slice**: 管理登录用户信息、Token。
-- **Pet Slice**: 管理宠物列表、当前选中的宠物 ID。
-- **Actions**: `login`, `logout`, `setPets`, `addPet`, `updatePet`, `deletePet`。
+### 3.1 账号注册与登录 (Auth Flow)
+1. 前端通过 `api.auth.register` 发送请求。
+2. 后端校验邮箱唯一性，存入 `users` 表。
+3. 登录后，后端返回 Mock JWT Token 和用户信息，前端将其存入 Zustand Store 和 LocalStorage（可选）。
 
-### 3.2 头像处理
-由于没有对象存储服务 (S3/OSS)，目前头像采用 **Base64** 方案：
-1. 用户选择本地图片。
-2. 前端 `FileReader` 读取为 Data URL (Base64)。
-3. 存入 `formData.avatar_url`。
-4. 在应用生命周期内保持在内存/Mock数据中。
-> *未来规划：上传至 Supabase Storage，数据库仅存 URL。*
+### 3.2 AI 计划同步 (AI Plan Synchronization)
+1. 用户在“健康计划”页点击“生成计划”。
+2. 后端 `HealthPlanService` 调用通义千问 AI，获取包含喂食、运动、加水等详细任务的 JSON 结果。
+3. **数据固化**: 后端将生成的计划保存到 `health_plans` 表，并同步在 `tasks` 表中创建今日任务。
+4. **前端响应**: 前端接收到成功响应后，通过全局 Store 更新 `tasks`，确保仪表盘实时展示新生成的任务。
 
-## 4. 目录结构规范
+## 4. 关键文件说明
 
-```
-frontend/src/
-├── components/    # 通用 UI 组件 (Buttons, Layouts)
-├── pages/         # 路由页面 (Dashboard, Login)
-├── hooks/         # 自定义 Hooks (useTheme)
-├── lib/           # 核心逻辑库
-│   ├── api.ts     # ★ API 适配层 (Mock 实现)
-│   ├── supabase.ts # Supabase 客户端 (预留)
-│   └── utils.ts   # 工具函数 (Class合并等)
-├── types/         # TypeScript 类型定义 (Pet, User, Task)
-├── store.ts       # 全局状态 Store
-└── ...
-```
+- **[api.ts](file:///c:/Users/Bruce/Desktop/yourHealthPet/Pet/frontend/src/lib/api.ts)**: 统一的 API 请求层，基于 `fetch` 封装，负责与后端通信。
+- **[store.ts](file:///c:/Users/Bruce/Desktop/yourHealthPet/Pet/frontend/src/store.ts)**: 前端单一数据源，管理宠物状态和任务。
+- **[PetHealthApplication.java](file:///c:/Users/Bruce/Desktop/yourHealthPet/Pet/backend/src/main/java/com/pethealth/PetHealthApplication.java)**: 后端入口文件。
+- **[HealthPlanService.java](file:///c:/Users/Bruce/Desktop/yourHealthPet/Pet/backend/src/main/java/com/pethealth/service/HealthPlanService.java)**: AI 核心逻辑，负责 Prompt 构建与任务自动同步。
 
-## 5. 安全策略 (Mock 版)
-- **鉴权模拟**: 登录接口返回虚构 Token，前端通过检查 `user` 对象是否存在来判断登录状态。
-- **路由保护**: `App.tsx` 中使用 `<Navigate>` 组件保护私有路由（如 `/`, `/pets`），未登录自动跳转 `/login`。
+## 5. 扩展性建议
+
+1. **真实鉴权**: 当前 Token 为 Mock，交接后建议集成 Spring Security + JWT 真实鉴权。
+2. **对象存储**: 目前头像采用 Base64，建议交接后集成阿里云 OSS 或 AWS S3。
+3. **消息推送**: 建议增加 WebSocket 实现喂食提醒。

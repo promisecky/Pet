@@ -4,49 +4,51 @@ import { Activity, Droplets, Utensils, CloudSun, Check, Sparkles, Smile, Gamepad
 import { clsx } from 'clsx'
 import { useStore } from '../store'
 import { api } from '../lib/api'
+import { Task } from '../types'
 
-type Task = {
-  id: string
-  title: string
-  detail: string
-  icon: any
-  color: string
-  completed: boolean
+const ICON_MAP: Record<string, any> = {
+  'utensils': Utensils,
+  'droplets': Droplets,
+  'activity': Activity,
+  'sparkles': Sparkles,
 }
 
-const INITIAL_TASKS: Task[] = [
-  { id: '1', title: '早餐喂食', detail: '08:00 AM • 50克', icon: Utensils, color: 'orange', completed: false },
-  { id: '2', title: '加水', detail: '保持水源新鲜', icon: Droplets, color: 'blue', completed: false },
-  { id: '3', title: '互动玩耍', detail: '20分钟 激光笔互动', icon: Activity, color: 'green', completed: false },
-  { id: '4', title: '午餐喂食', detail: '13:00 PM • 30克', icon: Utensils, color: 'orange', completed: false },
-  { id: '5', title: '梳毛护理', detail: '全身梳理5分钟', icon: Sparkles, color: 'purple', completed: false },
-  { id: '6', title: '晚餐喂食', detail: '19:00 PM • 40克', icon: Utensils, color: 'orange', completed: false },
-]
-
 export default function Dashboard() {
-  const { user, pets, currentPetId, setCurrentPetId, setPets } = useStore()
-  const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS)
+  const { user, pets, currentPetId, setCurrentPetId, setPets, tasks, setTasks } = useStore()
   const [completingId, setCompletingId] = useState<string | null>(null)
   const [showStatusMenu, setShowStatusMenu] = useState(false)
-  const [currentStatus, setCurrentStatus] = useState<{icon: any, color: string} | null>(null)
   const [showPetSwitcher, setShowPetSwitcher] = useState(false)
+  const [showWeightModal, setShowWeightModal] = useState(false)
+  const [weightInput, setWeightInput] = useState('')
 
   const currentPet = pets.find(p => p.id === currentPetId) || pets[0]
+
+  const STATUS_MAP: Record<string, { icon: any, color: string, label: string }> = {
+    'happy': { icon: Smile, color: 'bg-yellow-400', label: '开心' },
+    'playing': { icon: Gamepad2, color: 'bg-blue-400', label: '玩耍' },
+    'sleeping': { icon: Moon, color: 'bg-purple-400', label: '睡觉' }
+  }
+  
+  const currentStatus = currentPet?.status ? STATUS_MAP[currentPet.status] : null
 
   useEffect(() => {
     if (user?.id) {
       fetchPets()
     }
   }, [user?.id])
+  
+  useEffect(() => {
+    if (currentPetId) {
+      fetchTasks()
+      fetchWeights()
+    }
+  }, [currentPetId])
 
   async function fetchPets() {
     try {
       if (!user?.id) return
       const { data } = await api.pets.list(user.id)
       if (data) {
-        // Map backend pet to frontend pet (if needed, or ensure they match)
-        // Frontend Pet type might be slightly different from Backend Pet model
-        // For now, assuming they are compatible or "any" enough
         setPets(data)
         if (!currentPetId && data.length > 0) {
           setCurrentPetId(data[0].id)
@@ -57,41 +59,126 @@ export default function Dashboard() {
     }
   }
 
-  const handleComplete = (id: string) => {
+  async function fetchTasks() {
+    try {
+      if (!currentPetId) return
+      const { data } = await api.tasks.list(currentPetId)
+      setTasks(data)
+    } catch (error) {
+      console.error('Error fetching tasks:', error)
+    }
+  }
+
+  const handleComplete = async (id: string) => {
     setCompletingId(id)
-    setTimeout(() => {
+    try {
+      // Optimistic update locally first
       setTasks(prev => {
         const newTasks = [...prev]
         const index = newTasks.findIndex(t => t.id === id)
         if (index !== -1) {
-          const [completedTask] = newTasks.splice(index, 1)
-          completedTask.completed = true 
-          newTasks.push(completedTask)
+           const [task] = newTasks.splice(index, 1)
+           task.completed = true
+           newTasks.push(task)
         }
         return newTasks
       })
+      
+      await api.tasks.updateStatus(id, true)
+    } catch (e) {
+      console.error(e)
+      fetchTasks() // Revert on error
+    } finally {
       setCompletingId(null)
-    }, 500)
+    }
   }
 
-  const handleAddStatus = (status: {icon: any, color: string}) => {
-    setCurrentStatus(status)
-    setShowStatusMenu(false)
+  const handleAddStatus = async (statusKey: string) => {
+    if (!currentPetId) return
+    try {
+      // Optimistic update
+      const updatedPets = pets.map(p => p.id === currentPetId ? { ...p, status: statusKey } : p)
+      setPets(updatedPets)
+      setShowStatusMenu(false)
+
+      await api.pets.update(currentPetId, { status: statusKey })
+    } catch (e) {
+      console.error(e)
+      // Revert if failed (optional, but good practice)
+      fetchPets()
+    }
   }
 
-  const visibleTasks = tasks.slice(0, 3) // Only show top 3 tasks
   const pendingCount = tasks.filter(t => !t.completed).length
   const completedCount = tasks.filter(t => t.completed).length
 
-  const weightData = [
-    { date: '周一', weight: 4.5 },
-    { date: '周二', weight: 4.4 },
-    { date: '周三', weight: 4.6 },
-    { date: '周四', weight: 4.5 },
-    { date: '周五', weight: 4.3 },
-    { date: '周六', weight: 4.4 },
-    { date: '周日', weight: 4.2 },
-  ]
+  const [weightData, setWeightData] = useState<{ date: string; weight: number | null }[]>([])
+
+  useEffect(() => {
+    if (currentPetId) {
+      fetchWeights()
+    }
+  }, [currentPetId])
+
+  async function fetchWeights() {
+    try {
+      if (!currentPetId) return
+      const { data } = await api.weights.list(currentPetId)
+      
+      // Process data for the last 7 days
+      const last7Days = Array.from({ length: 7 }, (_, i) => {
+        const d = new Date()
+        d.setDate(d.getDate() - (6 - i))
+        return d
+      })
+
+      // Sort data by date
+      data.sort((a: any, b: any) => new Date(a.recordDate).getTime() - new Date(b.recordDate).getTime())
+
+      let lastKnownWeight: number | null = null;
+
+      const chartData = last7Days.map(date => {
+        const dateStr = date.toISOString().split('T')[0]
+        const record = data.find((r: any) => r.recordDate.startsWith(dateStr))
+        
+        if (record) {
+           lastKnownWeight = parseFloat(record.weight.toFixed(2))
+        }
+
+        return {
+          date: date.toLocaleDateString('zh-CN', { weekday: 'short' }),
+          weight: lastKnownWeight
+        }
+      })
+      
+      setWeightData(chartData)
+    } catch (error) {
+      console.error('Error fetching weights:', error)
+    }
+  }
+
+  const handleOpenWeightModal = () => {
+    if (!currentPetId) return
+    setWeightInput('')
+    setShowWeightModal(true)
+  }
+
+  const handleConfirmWeight = async () => {
+    const weight = parseFloat(weightInput)
+    if (!isNaN(weight) && currentPetId) {
+      try {
+        await api.weights.add(currentPetId, weight)
+        fetchWeights() // Refresh chart
+        // Update pet in store
+        const updatedPets = pets.map(p => p.id === currentPetId ? { ...p, weight } : p)
+        setPets(updatedPets)
+        setShowWeightModal(false)
+      } catch (error) {
+        console.error(error)
+        alert('记录失败')
+      }
+    }
+  }
 
   return (
     <div className="space-y-6 relative">
@@ -172,8 +259,9 @@ export default function Dashboard() {
           </div>
         </div>
         
-        <div className="relative min-h-[220px]"> 
-          {visibleTasks.map((task, index) => {
+        <div className="relative h-[270px] overflow-y-auto pr-2 custom-scrollbar"> 
+          {tasks.map((task, index) => {
+            const Icon = ICON_MAP[task.icon] || Activity
             const isCompleting = completingId === task.id
             const bgClass = {
               orange: 'bg-orange-50 text-orange-600',
@@ -207,7 +295,7 @@ export default function Dashboard() {
               >
                 <div className="flex items-center gap-4">
                   <div className={clsx("p-3 rounded-full", bgClass)}>
-                    <task.icon size={20} />
+                    <Icon size={20} />
                   </div>
                   <div>
                     <p className={clsx("font-bold text-gray-800", (isCompleting || task.completed) && "line-through text-gray-400")}>
@@ -231,7 +319,7 @@ export default function Dashboard() {
             )
           })}
           
-          {visibleTasks.length === 0 && (
+          {tasks.length === 0 && (
             <div className="text-center py-10 text-gray-400 bg-white rounded-xl border border-dashed border-gray-200">
               <Sparkles className="mx-auto mb-2 opacity-50" />
               <p>所有任务已完成！太棒了！</p>
@@ -271,6 +359,7 @@ export default function Dashboard() {
                 dataKey="weight" 
                 stroke="#f97316" 
                 strokeWidth={3} 
+                connectNulls={true}
                 dot={{ r: 4, fill: '#f97316', strokeWidth: 2, stroke: '#fff' }} 
                 activeDot={{ r: 6, fill: '#f97316' }}
               />
@@ -293,15 +382,15 @@ export default function Dashboard() {
           {showStatusMenu && (
             <div className="absolute bottom-full left-0 w-full mb-2 bg-white rounded-xl shadow-xl border border-gray-100 p-2 animate-in slide-in-from-bottom-2 duration-200 z-30">
               <div className="grid grid-cols-3 gap-2">
-                <button onClick={() => handleAddStatus({icon: Smile, color: 'bg-yellow-400'})} className="flex flex-col items-center p-2 hover:bg-gray-50 rounded-lg">
+                <button onClick={() => handleAddStatus('happy')} className="flex flex-col items-center p-2 hover:bg-gray-50 rounded-lg">
                   <div className="p-2 bg-yellow-100 text-yellow-500 rounded-full mb-1"><Smile size={20} /></div>
                   <span className="text-xs text-gray-500">开心</span>
                 </button>
-                <button onClick={() => handleAddStatus({icon: Gamepad2, color: 'bg-blue-400'})} className="flex flex-col items-center p-2 hover:bg-gray-50 rounded-lg">
+                <button onClick={() => handleAddStatus('playing')} className="flex flex-col items-center p-2 hover:bg-gray-50 rounded-lg">
                   <div className="p-2 bg-blue-100 text-blue-500 rounded-full mb-1"><Gamepad2 size={20} /></div>
                   <span className="text-xs text-gray-500">玩耍</span>
                 </button>
-                <button onClick={() => handleAddStatus({icon: Moon, color: 'bg-purple-400'})} className="flex flex-col items-center p-2 hover:bg-gray-50 rounded-lg">
+                <button onClick={() => handleAddStatus('sleeping')} className="flex flex-col items-center p-2 hover:bg-gray-50 rounded-lg">
                   <div className="p-2 bg-purple-100 text-purple-500 rounded-full mb-1"><Moon size={20} /></div>
                   <span className="text-xs text-gray-500">睡觉</span>
                 </button>
@@ -310,11 +399,49 @@ export default function Dashboard() {
           )}
         </div>
 
-        <button className="flex flex-col items-center justify-center p-4 bg-gradient-to-br from-orange-400 to-orange-600 text-white rounded-2xl shadow-lg shadow-orange-200 active:scale-95 transition-transform">
+        <button 
+          onClick={handleOpenWeightModal}
+          className="flex flex-col items-center justify-center p-4 bg-gradient-to-br from-orange-400 to-orange-600 text-white rounded-2xl shadow-lg shadow-orange-200 active:scale-95 transition-transform"
+        >
           <Activity className="mb-2 opacity-90" size={28} />
           <span className="font-bold">记录体重</span>
         </button>
       </div>
+
+      {showWeightModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl p-6 w-80 shadow-2xl scale-100 animate-in zoom-in-95 duration-200">
+            <h3 className="text-lg font-bold text-gray-900 mb-4">记录今日体重</h3>
+            <div className="relative mb-6">
+              <input
+                type="number"
+                autoFocus
+                step="0.01"
+                className="w-full px-4 py-3 text-2xl font-bold text-center text-orange-600 border-2 border-orange-100 rounded-xl focus:border-orange-500 focus:ring-0 outline-none"
+                placeholder="0.00"
+                value={weightInput}
+                onChange={(e) => setWeightInput(e.target.value)}
+              />
+              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 font-medium">KG</span>
+            </div>
+            <div className="flex gap-3">
+              <button 
+                onClick={() => setShowWeightModal(false)}
+                className="flex-1 py-3 text-gray-600 bg-gray-50 rounded-xl font-medium hover:bg-gray-100 transition-colors"
+              >
+                取消
+              </button>
+              <button 
+                onClick={handleConfirmWeight}
+                disabled={!weightInput}
+                className="flex-1 py-3 text-white bg-orange-500 rounded-xl font-bold shadow-lg shadow-orange-200 hover:bg-orange-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                确认
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

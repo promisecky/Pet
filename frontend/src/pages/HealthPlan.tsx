@@ -1,50 +1,85 @@
-import { useState } from 'react'
-import { Brain, Target, ChevronDown } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Brain, Target, ChevronDown, Edit3 } from 'lucide-react'
 import { useStore } from '../store'
 import { clsx } from 'clsx'
+import { api } from '../lib/api'
 
 type Plan = {
-  goal: string
-  target: string
+  id?: string
+  goal_type: string
+  target_weight: number
   daily_calories: number
-  schedule: { time: string; amount: string; type: string }[]
-  exercise: string
-  water: string
+  feeding_schedule: { time: string; amount: string; type: string }[]
+  exercise_plan: string
+  status: string
 }
 
 export default function HealthPlan() {
-  const { pets, currentPetId, setCurrentPetId } = useStore()
+  const { pets, currentPetId, setCurrentPetId, setTasks } = useStore()
   const currentPet = pets.find(p => p.id === currentPetId) || pets[0]
 
   const [generating, setGenerating] = useState(false)
+  const [loading, setLoading] = useState(false)
   const [plan, setPlan] = useState<Plan | null>(null)
   const [goalType, setGoalType] = useState('lose')
   const [targetWeight, setTargetWeight] = useState('')
   const [showPetSwitcher, setShowPetSwitcher] = useState(false)
+  const [isEditing, setIsEditing] = useState(false)
 
-  const handleGenerate = () => {
+  useEffect(() => {
+    if (currentPetId) {
+      fetchPlan()
+    }
+  }, [currentPetId])
+
+  async function fetchPlan() {
+    try {
+      setLoading(true)
+      const { data } = await api.healthPlans.get(currentPetId!)
+      if (data) {
+        setPlan(data)
+        // Set form defaults from existing plan
+        setGoalType(data.goal_type)
+        setTargetWeight(data.target_weight?.toString() || '')
+        setIsEditing(false)
+      } else {
+        setPlan(null)
+        setIsEditing(true) // Show create form if no plan
+      }
+    } catch (error) {
+      console.error(error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleGenerate = async () => {
     if ((goalType === 'lose' || goalType === 'gain') && !targetWeight) {
       alert('请输入目标体重')
       return
     }
 
     setGenerating(true)
-    // Simulate AI API call
-    setTimeout(() => {
-      setPlan({
-        goal: goalType === 'lose' ? '减重' : goalType === 'gain' ? '增重' : '保持健康',
-        target: targetWeight ? `${targetWeight}kg` : `${currentPet?.weight || 4}kg`,
-        daily_calories: goalType === 'lose' ? 200 : 300,
-        schedule: [
-          { time: '08:00', amount: '40g', type: '干粮' },
-          { time: '14:00', amount: '20g', type: '湿粮' },
-          { time: '20:00', amount: '40g', type: '干粮' },
-        ],
-        exercise: goalType === 'lose' ? '高强度互动：20分钟（早晚）' : '适度运动：15分钟',
-        water: '确保每日饮用200ml新鲜水'
-      })
+    
+    try {
+      const targetW = targetWeight ? parseFloat(targetWeight) : undefined
+      const { data } = await api.healthPlans.generate(currentPetId!, goalType, targetW)
+      setPlan(data)
+      setIsEditing(false)
+      
+      // Refresh tasks in store to sync with dashboard
+      const { data: tasksData } = await api.tasks.list(currentPetId!)
+      setTasks(tasksData)
+    } catch (error) {
+      console.error(error)
+      alert('生成计划失败')
+    } finally {
       setGenerating(false)
-    }, 2000)
+    }
+  }
+
+  if (loading) {
+    return <div className="p-8 text-center text-gray-500">加载中...</div>
   }
 
   return (
@@ -79,7 +114,6 @@ export default function HealthPlan() {
                   onClick={() => {
                     setCurrentPetId(pet.id)
                     setShowPetSwitcher(false)
-                    setPlan(null) // Reset plan when switching pet
                   }}
                   className={clsx(
                     "w-full text-left px-3 py-2 rounded-lg text-sm flex items-center gap-2",
@@ -95,12 +129,20 @@ export default function HealthPlan() {
         </div>
       </header>
 
-      {!plan ? (
+      {isEditing || !plan ? (
         <div className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl p-6 text-white shadow-lg animate-in slide-in-from-bottom-4">
-          <div className="flex items-center gap-3 mb-4">
-            <Brain className="w-8 h-8" />
-            <h2 className="text-xl font-bold">AI 规划师</h2>
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <Brain className="w-8 h-8" />
+              <h2 className="text-xl font-bold">{plan ? '调整计划' : 'AI 规划师'}</h2>
+            </div>
+            {plan && (
+              <button onClick={() => setIsEditing(false)} className="text-xs bg-white/20 px-3 py-1 rounded-full hover:bg-white/30 transition-colors">
+                取消
+              </button>
+            )}
           </div>
+          
           <p className="mb-6 opacity-90 text-sm">
             为 {currentPet?.name} ({currentPet?.weight}kg) 生成科学计划。
           </p>
@@ -142,12 +184,14 @@ export default function HealthPlan() {
             {generating ? (
               <>正在生成计划...</>
             ) : (
-              <>生成计划 ✨</>
+              <>{plan ? '生成新计划 ✨' : '生成计划 ✨'}</>
             )}
           </button>
         </div>
-      ) : (
-        <div className="animate-in fade-in slide-in-from-bottom-4 space-y-6">
+      ) : null}
+
+      {plan ? (
+        <div className="animate-in fade-in slide-in-from-bottom-4 space-y-6 mt-6">
           <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 relative overflow-hidden">
             <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
               <Brain size={100} />
@@ -157,12 +201,18 @@ export default function HealthPlan() {
               <div>
                 <h3 className="text-lg font-bold text-gray-900">当前计划</h3>
                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 mt-1">
-                  已保存并生效
+                  {plan.goal_type === 'lose' ? '减重模式' : plan.goal_type === 'gain' ? '增重模式' : '健康保持'}
                 </span>
               </div>
-              <button onClick={() => setPlan(null)} className="text-sm font-medium text-primary bg-orange-50 px-3 py-1.5 rounded-lg hover:bg-orange-100 transition-colors">
-                重新调整
-              </button>
+              {!isEditing && (
+                <button 
+                  onClick={() => setIsEditing(true)} 
+                  className="flex items-center gap-1 text-sm font-medium text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors"
+                >
+                  <Edit3 size={14} />
+                  修改计划
+                </button>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-4 mb-6 relative z-10">
@@ -172,7 +222,7 @@ export default function HealthPlan() {
               </div>
               <div className="p-3 bg-gray-50 rounded-lg text-center border border-gray-100">
                 <p className="text-xs text-gray-500 uppercase">目标体重</p>
-                <p className="text-xl font-bold text-gray-900">{plan.target}</p>
+                <p className="text-xl font-bold text-gray-900">{plan.target_weight} kg</p>
               </div>
             </div>
 
@@ -182,7 +232,7 @@ export default function HealthPlan() {
                 喂食时间表
               </h4>
               <div className="space-y-3">
-                {plan.schedule.map((item: any, i: number) => (
+                {plan.feeding_schedule && plan.feeding_schedule.map((item: any, i: number) => (
                   <div key={i} className="flex items-center justify-between p-3 bg-white border border-gray-100 rounded-lg shadow-sm">
                     <span className="font-mono text-gray-500 font-medium">{item.time}</span>
                     <span className="font-medium text-gray-700">{item.type}</span>
@@ -195,12 +245,12 @@ export default function HealthPlan() {
             <div className="mt-6 pt-6 border-t border-gray-100 relative z-10">
               <h4 className="font-semibold text-gray-900 mb-2">运动建议</h4>
               <p className="text-gray-600 text-sm bg-indigo-50 p-3 rounded-lg border border-indigo-100 leading-relaxed">
-                {plan.exercise}
+                {plan.exercise_plan}
               </p>
             </div>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
